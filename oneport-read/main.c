@@ -49,7 +49,10 @@
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = { .max_rx_pkt_len = ETHER_MAX_LEN }
 };
-static uint32_t nb_rx_total = 0;
+
+/* @MODIFIED */
+static uint64_t nb_rx_total = 0;
+static uint64_t timer_period = 3; /* print with period 3 seconds */
 
 /* basicfwd.c: Basic DPDK skeleton forwarding example. */
 
@@ -117,8 +120,15 @@ port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 static __attribute__((noreturn)) void
 lcore_main(void)
 {
-	const uint8_t nb_ports = rte_eth_dev_count();
+	/* @MODIFIED for nb_ports to set 1 */
+	const uint8_t nb_ports = 1;
 	uint8_t port;
+
+	/* @MODIFIED */
+	uint8_t is_loop_for_print = 0;
+	uint64_t prev_tsc, diff_tsc;
+	uint64_t last_printed_total = 0;
+	prev_tsc = 0;
 
 	/*
 	 * Check that the port is on the same NUMA node as the polling thread
@@ -135,8 +145,24 @@ lcore_main(void)
 	printf("\nCore %u forwarding packets. [Ctrl+C to quit]\n",
 			rte_lcore_id());
 
+	/* @MODIFIED */
+	printf("%d ports are active\n", nb_ports);
+
 	/* Run until the application is quit or killed. */
 	for (;;) {
+		/* @MODIFIED */
+		if (likely(is_loop_for_print == 0)) {
+			diff_tsc = rte_rdtsc() - prev_tsc;
+			if (unlikely(diff_tsc >= timer_period)) {
+				if (unlikely(last_printed_total != nb_rx_total)) {
+					printf("read total %10"PRIu64"\n", nb_rx_total);
+					last_printed_total = nb_rx_total;
+					prev_tsc = rte_rdtsc();
+				}
+				else is_loop_for_print = 1;
+			}
+		}
+
 		/*
 		 * Receive packets on a port and forward them on the paired
 		 * port. The mapping is 0 -> 1, 1 -> 0, 2 -> 3, 3 -> 2, etc.
@@ -151,8 +177,17 @@ lcore_main(void)
 			if (unlikely(nb_rx == 0))
 				continue;
 
+			/* @MODIFIED */
 			nb_rx_total += nb_rx;
-			printf("Port %d: read %3d total %10d", port, nb_rx, nb_rx_total);
+			if (unlikely(is_loop_for_print)) {
+				printf("read total %10"PRIu64"\n", nb_rx_total);
+				is_loop_for_print = 0;
+				last_printed_total = nb_rx_total;
+				prev_tsc = rte_rdtsc();
+			}
+			uint16_t buf;
+			for (buf=0; buf<nb_rx; buf++)
+				rte_pktmbuf_free(bufs[buf]);
 		}
 	}
 }
@@ -176,8 +211,17 @@ main(int argc, char *argv[])
 	argc -= ret;
 	argv += ret;
 
+	/* @MODIFIED convert to number of cycles */
+	timer_period *= rte_get_timer_hz();
+
 	/* Check that there is an even number of ports to send/receive on. */
 	nb_ports = rte_eth_dev_count();
+
+	/* @MODIFIED */
+	if (nb_ports > 1) {
+		printf("\nWARNING: Too many ports enabled. Only 1 used.\n");
+		nb_ports = 1;
+	}
 
 	/* Creates a new mempool in memory to hold the mbufs. */
 	mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
